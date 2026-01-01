@@ -1,11 +1,11 @@
-name: Ultimate 1.12.14 Stable Build (Final Pass)
+name: Ultimate 1.12.14 Stable Build (Module Fixed)
 on: workflow_dispatch
 
 jobs:
   build:
     runs-on: macos-14
     steps:
-      # 1. 🟢 强行对位 Java 17 (彻底杀掉之前看到的 FATAL 报错)
+      # 1. 🟢 强行环境对位 (Java 17 & Go)
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
@@ -17,28 +17,32 @@ jobs:
         with:
           go-version: '1.23'
 
-      # 2. 🟢 干净拉取全套源码
+      # 2. 🟢 干净拉取全套源码 (v1.12.14 稳定版)
       - name: Clone Clean Source
         run: |
           git clone https://github.com/SagerNet/sing-box-for-apple.git main-app
           git clone --branch v1.12.14 --depth 1 https://github.com/SagerNet/sing-box.git core-src
 
-      # 3. 🟢 暴力编译：不依赖固定路径，全盘搜索入口
-      - name: Build Core Framework (Auto-Discovery)
+      # 3. 🟢 核心编译：使用“包路径”模式，解决 go.mod 缺失问题
+      - name: Build Core Framework (Package Mode)
         run: |
+          # 安装编译工具
           go install github.com/sagernet/gomobile/cmd/gomobile@latest
           go install github.com/sagernet/gomobile/cmd/gobind@latest
           echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
           $(go env GOPATH)/bin/gomobile init
           
-          # 🔴 核心修复：不管官方把代码藏在哪，直接找出来并编译
-          CORE_DIR=$(find core-src -name "apple" -type d | grep "cmd/apple" | head -n 1)
-          echo "Found real core path at: $CORE_DIR"
+          # 🔴 核心修复：进入包含 go.mod 的源码根目录执行编译
+          cd core-src
           
-          cd "$CORE_DIR"
-          go run . framework -v
+          # 动态寻找包含 apple 编译逻辑的具体包路径
+          APPLE_PACKAGE=$(find cmd/apple -name "main.go" -o -name "apple.go" | head -n 1 | xargs dirname)
+          echo "Compiling package: ./$APPLE_PACKAGE"
           
-          # 搬运生成的零件
+          # 使用 go run 指向具体包，并生成 framework
+          go run ./$APPLE_PACKAGE framework -v
+          
+          # 搬运生成的 xcframework 到 App 目录
           cd $GITHUB_WORKSPACE
           mkdir -p main-app/Library/sing-box
           find core-src -name "*.xcframework" -exec cp -rf {} main-app/Library/sing-box/ \;
@@ -49,7 +53,7 @@ jobs:
           cd main-app
           # 剔除干扰项
           rm -rf Extension IntentsExtension WidgetExtension TVExtension
-          # 编译 IPA
+          # 强行构建无签名 IPA
           xcodebuild -project sing-box.xcodeproj \
                      -scheme SFI \
                      -configuration Release \
@@ -59,7 +63,7 @@ jobs:
                      FRAMEWORK_SEARCH_PATHS="$(pwd)/Library/sing-box" \
                      clean archive -archivePath build/sing-box.xcarchive
 
-      # 5. 🟢 打包产出
+      # 5. 🟢 打包与产出
       - name: Export for TrollStore
         run: |
           mkdir -p Payload
@@ -67,8 +71,8 @@ jobs:
           cp -rp "$APP_PATH" Payload/
           zip -r sing-box-1.12.14-stable.ipa Payload/
 
-      - name: Upload Finished IPA
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SingBox-Stable-Result
+          name: SingBox-1.12.14-Success
           path: sing-box-1.12.14-stable.ipa
