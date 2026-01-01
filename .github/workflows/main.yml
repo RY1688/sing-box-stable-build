@@ -1,0 +1,73 @@
+name: Ultimate 1.12.14 Stable Build
+on: workflow_dispatch
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      # 1. 🟢 强行对位 Java 17 环境 (解决你之前的 FATAL 报错)
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'microsoft'
+          java-version: '17'
+
+      # 2. 🟢 配置 Go 编译环境
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      # 3. 🟢 绕过所有旧路径：在虚拟机里重建纯净源码
+      - name: Clone Clean Source
+        run: |
+          # 克隆主 App (UI部分)
+          git clone https://github.com/SagerNet/sing-box-for-apple.git main-app
+          # 克隆指定 1.12.14 内核 (核心部分)
+          git clone --branch v1.12.14 --depth 1 https://github.com/SagerNet/sing-box.git core-src
+
+      # 4. 🟢 现场“磨制” 1.12.14 核心零件
+      - name: Build Core Framework
+        run: |
+          go install github.com/sagernet/gomobile/cmd/gomobile@latest
+          go install github.com/sagernet/gomobile/cmd/gobind@latest
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+          $(go env GOPATH)/bin/gomobile init
+          
+          # 进入内核目录并开始高强度编译
+          cd core-src/cmd/apple
+          go run . framework -v
+          
+          # 将生成的最新零件物理搬运到 App 项目中
+          mkdir -p ../../../main-app/Library/sing-box
+          cp -rf *.xcframework ../../../main-app/Library/sing-box/
+
+      # 5. 🟢 最终合成 IPA
+      - name: Final Xcode Synthesis
+        run: |
+          cd main-app
+          # 彻底剔除干扰证书报错的插件
+          rm -rf Extension IntentsExtension WidgetExtension TVExtension
+          # 强行构建无签名的 IPA
+          xcodebuild -project sing-box.xcodeproj \
+                     -scheme SFI \
+                     -configuration Release \
+                     -sdk iphoneos \
+                     CODE_SIGNING_ALLOWED=NO \
+                     CODE_SIGNING_REQUIRED=NO \
+                     FRAMEWORK_SEARCH_PATHS="$(pwd)/Library/sing-box" \
+                     clean archive -archivePath build/sing-box.xcarchive
+
+      # 6. 🟢 打包并产出
+      - name: Export for TrollStore
+        run: |
+          mkdir -p Payload
+          APP_PATH=$(find main-app/build/sing-box.xcarchive -name "*.app" | head -n 1)
+          cp -rp "$APP_PATH" Payload/
+          zip -r sing-box-1.12.14-stable.ipa Payload/
+
+      - name: Upload Finished IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: SingBox-Stable-Result
+          path: sing-box-1.12.14-stable.ipa
