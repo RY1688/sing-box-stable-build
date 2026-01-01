@@ -1,48 +1,43 @@
-name: Ultimate 1.12.14 Stable Build (Module Fixed)
+name: Build SingBox 1.12.14 (Official Bind Mode)
 on: workflow_dispatch
 
 jobs:
   build:
     runs-on: macos-14
     steps:
-      # 1. 🟢 强行环境对位 (Java 17 & Go)
+      # 1. 🟢 强行环境对位 (OpenJDK 17 必选)
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: 'microsoft'
           java-version: '17'
-
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.23'
 
-      # 2. 🟢 干净拉取全套源码 (v1.12.14 稳定版)
+      # 2. 🟢 干净拉取全套源码
       - name: Clone Clean Source
         run: |
           git clone https://github.com/SagerNet/sing-box-for-apple.git main-app
           git clone --branch v1.12.14 --depth 1 https://github.com/SagerNet/sing-box.git core-src
 
-      # 3. 🟢 核心编译：使用“包路径”模式，解决 go.mod 缺失问题
-      - name: Build Core Framework (Package Mode)
+      # 3. 🟢 核心编译：使用官方 gomobile bind 模式
+      - name: Build Core Framework (Official Bind)
         run: |
-          # 安装编译工具
+          # 安装官方编译工具
           go install github.com/sagernet/gomobile/cmd/gomobile@latest
           go install github.com/sagernet/gomobile/cmd/gobind@latest
           echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
           $(go env GOPATH)/bin/gomobile init
           
-          # 🔴 核心修复：进入包含 go.mod 的源码根目录执行编译
+          # 🔴 核心修复：直接对官方包进行 bind 操作，避开入口查找失败
           cd core-src
           
-          # 动态寻找包含 apple 编译逻辑的具体包路径
-          APPLE_PACKAGE=$(find cmd/apple -name "main.go" -o -name "apple.go" | head -n 1 | xargs dirname)
-          echo "Compiling package: ./$APPLE_PACKAGE"
+          # 这一步会现场“手磨”出 1.12.14 的 iOS 零件，需要约 5-8 分钟
+          gomobile bind -v -androidapi 21 -target ios ./constant
           
-          # 使用 go run 指向具体包，并生成 framework
-          go run ./$APPLE_PACKAGE framework -v
-          
-          # 搬运生成的 xcframework 到 App 目录
+          # 搬运生成的零件
           cd $GITHUB_WORKSPACE
           mkdir -p main-app/Library/sing-box
           find core-src -name "*.xcframework" -exec cp -rf {} main-app/Library/sing-box/ \;
@@ -51,9 +46,8 @@ jobs:
       - name: Final Xcode Synthesis
         run: |
           cd main-app
-          # 剔除干扰项
+          # 剔除干扰项确保编译通过
           rm -rf Extension IntentsExtension WidgetExtension TVExtension
-          # 强行构建无签名 IPA
           xcodebuild -project sing-box.xcodeproj \
                      -scheme SFI \
                      -configuration Release \
@@ -63,7 +57,7 @@ jobs:
                      FRAMEWORK_SEARCH_PATHS="$(pwd)/Library/sing-box" \
                      clean archive -archivePath build/sing-box.xcarchive
 
-      # 5. 🟢 打包与产出
+      # 5. 🟢 打包产出
       - name: Export for TrollStore
         run: |
           mkdir -p Payload
@@ -71,8 +65,8 @@ jobs:
           cp -rp "$APP_PATH" Payload/
           zip -r sing-box-1.12.14-stable.ipa Payload/
 
-      - name: Upload Artifact
+      - name: Upload Finished IPA
         uses: actions/upload-artifact@v4
         with:
-          name: SingBox-1.12.14-Success
+          name: SingBox-Stable-Result
           path: sing-box-1.12.14-stable.ipa
